@@ -7,3 +7,5 @@ report/*.log
 report/main_test.*
 report/main_head.tex
 report/*.out
+report/main.fdb_latexmk
+report/main.fls

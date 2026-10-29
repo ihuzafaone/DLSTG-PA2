@@ -1,0 +1,189 @@
+% ============================================================== QUESTION 1
+\section*{Question 1 --- River Forecasting Proposal}
+\addcontentsline{toc}{section}{Question 1 --- River Forecasting Proposal}
+
+\noindent\textbf{Proposal in one paragraph.} Every 10 minutes we forecast the water level $60$ minutes ahead at S1--S4 (with the intermediate $10,\dots,50$-minute levels and an 80\,\% interval) using a \emph{river-graph forecaster}: per-station causal temporal encoders, followed by \emph{lag-aware attention} that lets every station read only its physically plausible upstream sources (reservoir releases, upstream stations, the monitored tributary T1, rainfall) at the lag implied by a flow-dependent travel time. The unmonitored tributary is a latent node driven by R2 rainfall, and the announced release schedule enters as known future tokens. The system is small ($\approx\!1.7\times10^{5}$ parameters, a few milliseconds per forecast) and is built to keep working with missing, late or contradictory data.
+
+% ------------------------------------------------------------------ 1
+\subsection*{1.\ Architecture diagram}
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  font=\sffamily\scriptsize, x=1cm, y=1cm,
+  nsrc/.style={draw=blue!60!black,rounded corners=2pt,fill=blue!7,minimum width=40mm,minimum height=10mm,inner sep=2pt,align=center,text width=39mm},
+  nblk/.style={draw=teal!60!black,rounded corners=2pt,fill=teal!9,inner sep=3pt,align=left},
+  nside/.style={draw=violet!70!black,rounded corners=2pt,fill=violet!8,inner sep=3pt,align=left},
+  nout/.style={draw=orange!70!black,rounded corners=2pt,fill=orange!14,inner sep=3pt,align=center},
+  arr/.style={-{Stealth[length=2mm]},thick,gray!60!black},
+  ndim/.style={font=\tiny\ttfamily,fill=white,inner sep=1pt,text=black!80}]
+% sources
+\node[nsrc] (s1) at (2.0,0)  {\textbf{Water levels} S1--S4, T1\\ every 10 min};
+\node[nsrc] (s2) at (6.4,0)  {\textbf{Rainfall} R1, R2\\ time-stamped accumulations};
+\node[nsrc] (s3) at (10.9,0) {\textbf{Releases}: recorded $+$ \textbf{announced} schedule (announce / effective time)};
+\node[nsrc] (s4) at (15.3,0) {\textbf{Static}: locations, connectivity, distances $D_{ij}$};
+% A
+\node[nblk,text width=167mm,minimum width=172mm] (A) at (8.7,-2.35) {\textbf{A\ \ Alignment \& pre-processing.}\ \ $\bullet$ snapshot at $t_0$: only records that have \emph{arrived} $\bullet$ 10-min grid (level: last value in bin; rain: sum; release: step) $\bullet$ per-station $z$-score; mask $m$ and age $a$ (steps since the last real value) $\bullet$ window $L{=}36$ steps (6\,h) $\bullet$ announced schedule for $u{=}{+}1..{+}6$};
+% B, C
+\node[nblk,text width=72mm,minimum width=76mm] (B) at (3.9,-4.75) {\textbf{B\ \ Projection \& embedding.} Linear $F{\to}d{=}64$ per node type (release / rain / level); $+$ node and lag embeddings; add latent node U $\Rightarrow N{=}9$. \emph{Reshape} $[B,9,L,d]\!\to\![B{\cdot}9,d,L]$ for the temporal conv.};
+\node[nblk,text width=72mm,minimum width=76mm] (C) at (13.5,-4.75) {\textbf{C\ \ Temporal blocks $\times3$.} Causal Conv1d $k{=}3$, dilation $1,2,4$, LayerNorm, GELU, residual; one stream per node (receptive field 15 steps); reshaped back to $[B,9,L,d]$.};
+% D with side inputs
+\node[nblk,text width=82mm,minimum width=86mm] (D) at (8.7,-7.7) {\textbf{D\ \ River blocks $\times2$ (source combination).} Lag-aware attention; every child reads only its parents: Rel,R1$\to$S1\ \ R1$\to$T1\ \ S1,T1,R1$\to$S2\ \ S2,U,R2$\to$S3\ \ S3,R2$\to$S4. Score $=q^{\top}k/\!\sqrt{d_k}-(\lambda-\tau_{ij})^{2}/2\varsigma_{ij}^{2}$, travel time $\tau_{ij}$ from $D_{ij}$ and flow state; $h_j\!\leftarrow\!h_j+\mathrm{GELU}(W[h_j\Vert m_j])$.};
+\node[nside,text width=36mm,minimum width=40mm] (F) at (2.0,-7.7) {\textbf{Announced releases}\\ $[B,6,5]\to$ Linear $\to$ 6 future tokens of node Rel $[B,6,64]$};
+\node[nside,text width=36mm,minimum width=40mm] (U) at (15.4,-7.7) {\textbf{Latent inflow U}\\ lag attention from R2 rain tokens $\to$ stream $[B,36,64]$ (feeds S3)};
+% E, output
+\node[nblk,text width=120mm,minimum width=124mm] (E) at (8.7,-10.3) {\textbf{E\ \ Horizon decoder.} 24 queries $=$ 4 stations $\times$ 6 horizons $[B,24,64]$; lag attention over past \emph{and} future tokens ($\theta{=}h$); MLP head $\to$ median increment and two non-negative gaps (q10, q90); level $=\ell_{\rm last}+\sigma_j\hat\Delta$.};
+\node[nout,text width=120mm,minimum width=124mm] (O) at (8.7,-12.1) {\textbf{Forecasts S1--S4:} $\hat Y\in\mathbb{R}^{B\times4\times6\times3}$ (horizons $+10..{+}60$\,min, quantiles 0.1 / 0.5 / 0.9);\ headline: median at $+60$\,min, $[B,4]$};
+% arrows
+\foreach \i in {s1,s2,s3,s4} \draw[arr] (\i.south) -- (\i.south |- A.north);
+\draw[arr] (A.south -| B.north) -- node[ndim,right]{X $[B,8,36,6]$,\ FUT $[B,6,5]$,\ $D_{ij}$ $[9,9]$} (B.north);
+\draw[arr] (B.east) -- node[ndim,above]{H $[B,9,36,64]$} (C.west);
+\coordinate (cx) at (11.6,0);
+\draw[arr] (cx |- C.south) -- node[ndim,right,pos=0.45]{tokens $[B,9,42,64]$} (cx |- D.north);
+\draw[arr] (F.east) -- (D.west);
+\draw[arr] (U.west) -- (D.east);
+\draw[arr] (D.south) -- node[ndim,right]{states $[B,9,64]$ and tokens} (E.north);
+\draw[arr] (E.south) -- node[ndim,right]{$[B,4,6,3]$} (O.north);
+\end{tikzpicture}
+\caption*{\textbf{Figure Q1.} Architecture. $B$ = batch axis (independent issuance times; $B{=}1$ in operation); $L{=}36$ past steps; $N{=}9$ nodes (Rel, R1, R2, T1, S1, S2, U, S3, S4); token axis $42=36$ past $+\,6$ future steps; $d{=}64$. \emph{Alignment} puts all stations on one clock but does not remove the physical delay between stations (modelled explicitly in D and E); \emph{projection} maps each node type's features to the shared width $d$; \emph{reshapes} are noted on the blocks. Training: weighted pinball loss on observed targets $+$ celerity prior, chronological split, node/gap dropout and simulated delays.}
+\end{figure}
+
+% ------------------------------------------------------------------ 2
+\subsection*{2.\ Assumptions}
+\noindent\textbf{Supplied facts (not assumptions).} Four main-river stations S1$\to$S4 in flow order; reservoir above S1; monitored tributary T1 joins between S1 and S2; an \emph{unmonitored} tributary joins between S2 and S3; rain gauges R1, R2 with known locations; levels at S1--S4, T1 every 10\,min; rainfall with timestamps; recorded releases plus future schedules announced before each forecast (announcement and effective times); distances along the river; uneven spacing; travel times may change with conditions. \emph{Not supplied:} travel times, unmonitored inflow, future rain or levels, reporting delays, gauge quality.
+
+\begin{table}[H]\centering\footnotesize
+\renewcommand{\arraystretch}{1.12}
+\begin{tabularx}{\linewidth}{@{}l>{\raggedright\arraybackslash}p{4.6cm}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}X@{}}
+\toprule
+ & Assumption & Why reasonable & Effect on the design \\ \midrule
+A1 & Records carry a measurement time stamp within $\pm1$ step of the 10-min grid.& Telemetry loggers are clock-driven; jitter of a minute or two is typical.& Re-gridding in block A (last value per bin; rain \emph{summed} per bin).\\
+A2 & Levels are stage in metres on a fixed datum per gauge ($\approx\pm$1--2\,cm); rain gauges give accumulations (tipping bucket, $\approx0.2$\,mm).& Standard instrumentation; datum offsets between stations do not matter for forecasting changes.& Per-station standardisation $\mu_i,\sigma_i$; forecasts are \emph{increments} on the last observed level.\\
+A3 & Arrival delay is usually $0$--$2$ steps, occasionally up to 1\,h; each record has a measurement and an arrival time.& Cellular/radio links are late rather than wrong; telemetry logs normally hold both stamps.& As-of snapshot at $t_0$; delays simulated in training (\S5).\\
+A4 & Gaps are mostly short (1--6 steps) with rare long outages; spikes/flat-lines can be flagged by simple QC; failures are more likely during storms.& Usual sensor/communication behaviour; storms damage gauges.& Mask + age channels; node and gap dropout in training; QC-flagged values are treated as missing.\\
+A5 & Several years of history are available, with multiple flood rises and release events, and a stable gate-operation regime.& A forecasting service is commissioned from an operating record; ``historical'' implies years, not days.& Modest model size ($\approx$0.17\,M parameters) and shared weights; chronological split; event oversampling.\\
+A6 & Dominant flow is one-dimensional downstream; a disturbance moves at a celerity $c$ of order $1$--$3$\,m/s ($\approx4$--$11$\,km/h) that \emph{rises with stage}; no tide, no backwater from S4's bridge.& Kinematic/diffusive-wave behaviour of mountain rivers; the supplied map shows a free-flowing river.& \emph{Directed} graph (no downstream$\to$upstream links); causal lags $\lambda\!\ge\!0$; lag window $\le18$ steps (3\,h) inside $L{=}36$.\\
+A7 & Travel times and attenuation depend on flow state; the 60-min horizon is comparable to travel time between neighbouring stations.& Celerity grows with depth; the horizon was chosen by the authority for this river.& Travel time $\tau_{ij}$ is \emph{state dependent} with a distance-based prior; spread $\varsigma_{ij}$ grows with distance.\\
+A8 & The unmonitored tributary is mostly rain driven (R2 catchment, lag 1--3\,h), unregulated; its inflow shows up as a rise at S3 not explained by S2.& It lies between S2 and S3, below the reservoir, and has no gauge or control.& Latent node U fed by R2 rain tokens; S3/S4 decoders also see their own recent trend (it reveals inflow once it arrives).\\
+A9 & Point rainfall at R1/R2 is a usable proxy of its sub-catchment's rain; antecedent 24\,h/72\,h rainfall indicates wetness.& Only two gauges exist; antecedent precipitation is the standard wetness proxy.& Rain nodes R1, R2 with learned lag kernels; antecedent sums as channels; widened intervals (\S6).\\
+A10 & Announced schedules cover at least the next 60\,min; the dam$\to$S1 travel time is $<1$\,h; actual release usually follows the schedule within $\approx10\%$ and a step.& A schedule is announced to be acted on; S1 is the first station below the dam.& Future-release tokens on node Rel with \emph{effective} times; deviation channel; fallback in \S5(iv).\\
+A11 & Channel and gate rules change slowly (months).& Typical for engineered rivers; abrupt changes would be communicated.& Scheduled retraining, drift monitor (\S5).\\
+A12 & Flood-warning levels exist per station; forecasts support human decisions.& Standard in flood preparedness; output is advice, not automatic gate control.& Flood-weighted loss, quantile (interval) outputs.\\ \bottomrule
+\end{tabularx}
+\end{table}
+
+% ------------------------------------------------------------------ 3
+\subsection*{3.\ Forecasting task and data specification}
+\noindent\textbf{Task.} Issuance time $t_0$ is any instant on the 10-min grid ($t_0=10k$ min); a forecast uses only records with arrival time $\le t_0$ (plus the schedule announced by then). \textbf{History window:} $L{=}36$ steps, $s\in\{-35,\dots,0\}$, i.e.\ $t_0-350,\dots,t_0$ min (6\,h; covers the assumed $\le3$\,h travel plus rainfall response). \textbf{Horizon:} $H{=}6$ steps, $h\in\{1,\dots,6\}$ = $t_0{+}10h$ min; the \emph{service output} is the level at $t_0{+}60$\,min ($h{=}6$) at S1--S4, the other horizons give the trajectory and training signal. \textbf{Output:} $\hat Y\in\mathbb{R}^{B\times4\times6\times3}$ (stations $\times$ horizons $\times$ quantiles $0.1/0.5/0.9$) converted to metres; $B$ is the batch axis of independent issuance times.
+
+\begin{table}[H]\centering\scriptsize
+\renewcommand{\arraystretch}{1.1}
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{2.35cm}>{\raggedright\arraybackslash}p{2.9cm}>{\raggedright\arraybackslash}p{4.05cm}>{\raggedright\arraybackslash}X@{}}
+\toprule
+Input / output & Shape & Axes (channels) & Time coverage and availability at $t_0$ \\ \midrule
+Levels S1--S4, T1 & $[B,5,36,6]$ & batch, station, step, channels: $z$-level, $\Delta z$ (10\,min), $z_s{-}z_{s-6}$ (1\,h trend), mask $m$, age $a$, QC flag & $t_0{-}350..t_0$ min at 10-min steps; latest value may be missing/late. Future levels \emph{not} available.\\
+Rainfall R1, R2 & $[B,2,36,6]$ & batch, gauge, step, ch.: $\log(1{+}r)$, 1-h sum, 24-h and 72-h antecedent sums, $m$, $a$ & Same grid; accumulations over each 10-min bin (timestamps snapped). Future rain \emph{not} available.\\
+Recorded releases & $[B,1,36,6]$ & batch, node Rel, step, ch.: actual $z$-release, schedule \emph{as issued then}, deviation, $\Delta$, $m$, $a$ & Same grid; actual release known up to $t_0$ (may lag).\\
+Announced future releases & $[B,6,5]$ & batch, future step $u{=}1..6$, ch.: scheduled release, change vs.\ previous announcement, announcement age, lead $u/6$, mask & Effective times $t_0{+}10u$ min; announced at or before $t_0$. Pad/mask if the schedule is shorter.\\
+Static graph data & $[9,9]$, $[9]$ (no batch axis) & distances $D_{ij}$ (km), parent mask $A_{ji}$, node-type id & Supplied (locations, connectivity, distances).\\
+Node tensor $X$ (stack of the first three rows) & $[B,8,36,6]$ & batch, node (Rel,R1,R2,T1,S1,S2,S3,S4), step, channel (unused $=0$) & Latent U is added inside the model $\Rightarrow N{=}9$.\\ \midrule
+\textbf{Output} $\hat Y$ & $[B,4,6,3]$ & batch, station (S1..S4), horizon $h$, quantile & Times $t_0{+}10h$ min; median at $h{=}6$ is the +60-min forecast.\\
+Target $Y$ (training) & $[B,4,6]$ + mask & observed level at $t_0{+}10h$ min & Used only to train/evaluate; missing targets are masked out.\\ \bottomrule
+\end{tabularx}
+\end{table}
+\noindent\textbf{Alignment.} \emph{Across sampling times:} every record is assigned to a 10-min bin by its \emph{measurement} time (level: last value in the bin; rain: sum; release: last value held); the bin index $s$ is the same for all nodes, so ``step $s$'' means the same wall-clock time everywhere. \emph{Across locations:} the stations are \emph{not} shifted into one another's frame; the physical delay between S1 and S2 is deliberately left in the data and handled by the lag attention (\S4). \emph{Units:} levels and releases are $z$-scored per station, rain is $\log(1{+}r)$. \textbf{Information at issuance:} all data with measurement time $\le t_0$ and arrival time $\le t_0$; the announced schedule for $t_0{+}10..t_0{+}60$; static geometry. \textbf{Not available:} future rainfall, future levels, actual future releases, records still in transit.
+
+% ------------------------------------------------------------------ 4
+\subsection*{4.\ Model computations and design justification}
+\noindent\textbf{Notation.} Nodes $V=\{\text{Rel,R1,R2,T1,S1,S2,U,S3,S4}\}$; $P(j)$ = allowed sources of node $j$ (below); $s\in\{-35..0\}$ past step; $\kappa(i)$ node type; $\ell_{i,s}$ raw reading, $z_{i,s}=(\ell_{i,s}-\mu_i)/\sigma_i$; $x_{i,s}\in\mathbb{R}^6$ the channels of the table above; $d{=}64$; $D_{ij}$ in km; one step $=1/6$\,h.
+\[
+P(\text{S1})=\{\text{Rel,R1}\},\ P(\text{T1})=\{\text{R1}\},\ P(\text{S2})=\{\text{S1,T1,R1}\},\ P(\text{U})=\{\text{R2}\},\ P(\text{S3})=\{\text{S2,U,R2}\},\ P(\text{S4})=\{\text{S3,R2}\}.
+\]
+\noindent\textbf{(i) Embedding} (block B)\hfill$h^{0}_{i,s}=W_{\kappa(i)}\,x_{i,s}+e_i+p_s\in\mathbb{R}^{d}$\hfill(1)
+
+\noindent\textbf{(ii) Temporal blocks} (block C; $\ell=1,2,3$, causal because future data do not exist, A6; dilation $2^{\ell-1}$; per node)
+\[
+h^{\ell}_{i,s}=h^{\ell-1}_{i,s}+\mathrm{GELU}\Big(\mathrm{LN}\Big(\sum_{r=0}^{2}W^{\ell}_{r}\,h^{\ell-1}_{i,\,s-2^{\ell-1}r}\Big)\Big).\tag{2}
+\]
+\noindent\textbf{(iii) Lag-aware attention} (the operator inside blocks D, E and the U stream). A query of node $j$ at target step $\theta$ ($\theta{=}0$ in the encoder, $\theta{=}h$ in the decoder) reads tokens $(i,s')$, $i\in P(j)$, $s'\le\theta$, with lag $\lambda=\theta-s'$:
+\begin{align}
+\tau_{ij}&=\frac{6\,D_{ij}}{c_{ij}},\qquad c_{ij}=\bar c_{ij}\exp\!\big(\tfrac12\tanh\phi([h_{j,0}\Vert h_{i,0}])\big),\qquad \varsigma_{ij}=\tfrac12+\mathrm{softplus}(a_{ij}),\tag{3}\\
+\alpha_{(i,s')}&=\operatorname*{softmax}_{(i,s')}\Big(\tfrac{(W_Qq)^{\top}(W_Kh_{i,s'})}{\sqrt{d_k}}-\tfrac{(\lambda-\tau_{ij})^{2}}{2\varsigma_{ij}^{2}}\Big),\qquad m=W_O\sum_{(i,s')}\alpha_{(i,s')}\,W_Vh_{i,s'}\tag{4}
+\end{align}
+(4 heads). $\bar c_{ij}$ is a learned per-edge celerity (initialised at 5\,km/h, A6), $\phi$ a small MLP: travel time can shorten at high stage (A7), the spread $\varsigma_{ij}$ grows with distance, and the Gaussian term is only a \emph{prior}: the content score can override it when the data disagree.
+
+\noindent\textbf{(iv) Latent inflow of U} (side box of D; A8): for every past step $s$, $h_{\text{U},s}=\mathrm{Attn}(q=e_{\text{U}}+p_s;\ \text{R2 tokens},\ \theta{=}s)$ --- a learned rainfall$\to$inflow kernel.
+
+\noindent\textbf{(v) River blocks} (block D, $\ell=1,2$): source combination at $\theta{=}0$ for the children S1, T1, S2, S3, S4,
+\[
+m_j=\mathrm{Attn}\big(h_{j,0};\ \text{tokens of }P(j)\big),\qquad h_{j,0}\leftarrow h_{j,0}+\mathrm{GELU}\big(W_{\ell}[\,h_{j,0}\Vert m_j\,]\big).\tag{4b}
+\]
+One softmax runs jointly over \emph{all} sources of a node, so the model decides how much of S3's next change is upstream water (S2), the unmonitored inflow (U) or direct rain (R2).
+
+\noindent\textbf{(vi) Forecast mapping} (block E) for station $j\in\{\text{S1..S4}\}$ and horizon $h$: query $q_{j,h}=h_{j,0}+e^{\rm hor}_h$; message $m_{j,h}=\mathrm{Attn}(q_{j,h};\,\theta{=}h)$ over the past tokens and, for node Rel, the 6 future-release tokens;
+\begin{align}
+\hat\Delta_{j,h}&=\mathrm{MLP}\big([q_{j,h}\Vert m_{j,h}\Vert h_{j,0}]\big)\in\mathbb{R}^{3},\qquad \hat z_{j,h,0.5}=z^{\rm last}_j+\hat\Delta^{(1)}_{j,h},\tag{5}\\
+\hat z_{j,h,0.1}&=\hat z_{j,h,0.5}-\mathrm{softplus}(\hat\Delta^{(2)}_{j,h}),\qquad \hat z_{j,h,0.9}=\hat z_{j,h,0.5}+\mathrm{softplus}(\hat\Delta^{(3)}_{j,h})\notag
+\end{align}
+and $\hat\ell=\mu_j+\sigma_j\hat z$ in metres; $z^{\rm last}_j$ is the last valid reading (its age is an input, so the head learns to forecast over age$+h$ steps). Monotone quantile construction prevents crossing.
+
+\noindent\textbf{(vii) Training objective} (loss in the diagram caption). With $\rho_q(u)=\max(qu,(q-1)u)$ and observation mask $o$,
+\begin{equation}
+\mathcal{L}=\frac1{|\mathcal{B}|}\sum_{b}\sum_{j=1}^{4}\sum_{h=1}^{6}o_{bjh}\,\omega_{bj}\lambda_h\!\!\sum_{q\in\{.1,.5,.9\}}\!\!\rho_q\big(z_{bjh}-\hat z_{bjh,q}\big)+\beta\!\!\sum_{(i,j)}\!\big(\log\bar c_{ij}-\log c^{\rm prior}_{ij}\big)^2,\tag{6}
+\end{equation}
+with $\omega=1+4\cdot\mathbf{1}[\text{level above warning level}]$ (A12), $\lambda_h=1$ except $\lambda_6=2$ (the service horizon), and $c^{\rm prior}$ a hydraulic prior (initially 5\,km/h, replaced by values from a rating/hydraulic model if the authority supplies it, \S6). The median ($q{=}0.5$) term is a mean-absolute error: robust to spikes and returns a median forecast rather than a mean, which is the right target when the loss is asymmetric or the outcome is multi-modal (e.g.\ rain or no rain at R2). Chronological train/validation/test split; training windows are oversampled around rises; ensemble of 5 seeds; interval calibrated by conformal adjustment on a rolling validation window.
+
+\noindent\textbf{How each source influences each forecast.}
+\begin{itemize}[leftmargin=*,itemsep=1pt,topsep=2pt]
+\item \emph{S1:} own trend; \textbf{releases} (past via lagged attention to Rel; \emph{future announced} via the 6 future tokens at lag $h{-}u\approx\tau_{\text{Rel,S1}}$, A10); R1 rain (A9).
+\item \emph{S2:} S1 (lag $\tau_{12}$) and \textbf{T1} (lag $\tau_{T1,2}$) --- two parents of the confluence, combined additively through the shared residual state; R1 rain.
+\item \emph{S3:} S2 (lag $\tau_{23}$), the \textbf{unmonitored inflow} U (R2-driven, A8) and R2 rain; \emph{S4:} S3 and R2. Upstream conditions that are more than $h$ steps away influence S4 only through states already visible at S3.
+\item \emph{Rainfall:} enters only through the learned lag kernels (rain$\to$runoff delay), modulated by antecedent sums; there is no future rain.
+\end{itemize}
+\textbf{Justification of major choices.} (a) \emph{Attention restricted to a directed river graph with a travel-time prior} instead of neighbour convolutions: stations are unevenly spaced and travel times change, so ``neighbour'' (index distance) and ``lag'' are \emph{not} uniform; local ST convolutions also have a hard reach (companion notebook: three ST blocks fail beyond three sensors) whereas lag attention gives a direct path from the reservoir or rain gauge to any station at only $\approx9\times42$ tokens (cost $\propto\sum_j|P(j)|\,42\,d$, negligible). (b) \emph{Dense all-to-all attention} would give the same reach but would also allow physically impossible paths (S4$\to$S1) and more parameters to fit with few floods; the graph mask removes them. (c) \emph{Increments on the last observation} remove datum differences and make persistence the starting point. (d) \emph{Latent node U} lets rainfall explain unmonitored inflow without pretending it is measured.
+
+\noindent\textbf{Physical versus learned.} \emph{Imposed:} flow direction (graph), causality ($\lambda{\ge}0$, no future data), positive travel time $\propto$ distance, additive combination at confluences, rain $\ge0$. \emph{Learned:} the state dependence of celerity $\phi$, spread $\varsigma$, the rainfall$\to$inflow kernel, attenuation and the release$\to$level response. Mass conservation is \emph{not} enforced because only stage (not discharge) is measured (\S6). \emph{Optional extras not built:} a hydraulic simulator (it would be used to generate extreme-flood training data and to set $c^{\rm prior}$) and a full Bayesian model; uncertainty is represented by quantile heads + ensemble + conformal calibration.
+
+% ------------------------------------------------------------------ 5
+\subsection*{5.\ Operation and exceptional conditions}
+\noindent\textbf{(i) Missing observations.} A missing value is not imputed silently: the last valid value is carried in the tensor but flagged ($m{=}0$) with its \emph{age} $a$; attention scores of never-observed tokens are set to $-\infty$ so the softmax renormalises over the remaining sources. During training every window gets random gaps (1--6 steps) and random whole-node dropout ($p{=}0.1$), so the network has learned to forecast with any single sensor missing. If the target station itself is missing, eq.\ (5) forecasts $\mathrm{age}+h$ steps from its last value (wider interval). Outputs carry a \emph{degraded} flag with the number of valid inputs; a station silent for $>1$\,h is reported as low confidence rather than silently continued. \emph{Justification:} masking plus training-time dropout is the only way a model sees the same missingness pattern it will meet in operation.
+
+\noindent\textbf{(ii) Delayed observations.} The data store keeps measurement time $t_m$ and arrival time $t_a$. At issuance only records with $t_a\le t_0+1$ min are used (1-min grace, then no waiting): late records are \emph{missing at that issuance} and are inserted at their correct bin $s$ for all later issuances. Training windows are built point-in-time, with delays resampled from the empirical $t_a-t_m$ distribution, so training and deployment see the same lateness; no hindsight (a record that arrived later is never visible in a training sample issued earlier). Because forecasts repeat every 10 min, a late record simply improves the next one.
+
+\noindent\textbf{(iii) Announced future releases.} The schedule is represented as a step function over $t_0{+}10..{+}60$\,min from the \emph{latest announcement made at or before $t_0$}; every future token carries its \emph{effective} time (so a release effective at $+30$\,min is attributed to S1 at $+30{+}\tau_{\text{Rel,S1}}$ min, never earlier), its change from the previous announcement and its age. If the schedule is missing or shorter than 60\,min the uncovered steps are masked and the model falls back on ``last actual release held'', flagged. Announcements made after $t_0$ are, of course, unseen.
+
+\noindent\textbf{(iv) Scheduled versus actual releases.} History tokens contain both the schedule \emph{as it was issued} and the recorded actual release, and their deviation $\delta_s$; training uses these as-issued schedules, so the network learns $E[\text{actual}\mid\text{schedule},\delta]$ and its spread (hence a wider interval after deviations), and training schedules are additionally perturbed with the empirical deviation distribution. In operation, if $|\delta|$ exceeds $3\times$ its historical MAD for 3 consecutive steps (schedule evidently not followed) the future-release tokens are \emph{masked} and the model relies on the actual-release history until the deviation ends; an alert is raised to the operator.
+
+\noindent\textbf{Feasibility every 10 minutes.} A forecast touches $9\times42{=}378$ tokens at width 64; the untrained prototype of exactly this architecture has $1.68\times10^{5}$ parameters ($\approx0.7$\,MB) and runs a forward pass in $\approx5$\,ms on one CPU thread (a shape/size check, not a benchmark), i.e.\ $\approx25$\,ms for the 5-member ensemble against a 600\,s cycle. The bottleneck is data ingestion, not compute: a rolling buffer keeps the last 6\,h plus 72\,h of rain totals; each cycle runs ingest $\to$ QC $\to$ regrid $\to$ forecast $\to$ publish with a watchdog and a fallback chain (ensemble $\to$ single model $\to$ persistence with schedule routing $\to$ ``no forecast'' alert). Training (a few hours) is offline; retraining after each flood season or when the drift monitor (rolling skill vs.\ persistence, input-distribution shift) trips.
+
+% ------------------------------------------------------------------ 6
+\subsection*{6.\ Uncertainty, limitations, and additional information}
+\begin{table}[H]\centering\scriptsize
+\renewcommand{\arraystretch}{1.08}
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{3.0cm}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}X@{}}
+\toprule
+Uncertainty / limitation & Impact on the forecast & Response, or what remains unresolved \\ \midrule
+\textbf{Unmonitored tributary} (S2--S3) & Inflow appears first at S3 and propagates to S4; during rain over its catchment S3/S4 rise ``unexplained'', mostly on the rising limb. & Latent node U driven by R2 and antecedent rain; S3/S4 heads see their own trend; intervals widen when R2 recently rained. \emph{Unresolved:} magnitude and timing of the inflow are not identifiable without a gauge.\\
+\textbf{Changing travel times} & A fixed lag would shift the predicted rise (too early/late), most at floods; error peaks at hydrograph rises. & State-dependent celerity $\phi$, learned spread $\varsigma$, trained over all regimes; out-of-distribution detector (stage above training range) widens the interval. \emph{Unresolved:} overbank flow and hysteresis in the largest floods.\\
+\textbf{No future rainfall} & Rain falling after $t_0$ is unknown; at a 1-h horizon this matters most at S1/T1 catchments with short response. & Quantile outputs (80\,\% band); training on all weather. \emph{Unresolved:} unexpected rainfall within the hour.\\
+\textbf{Two rain gauges} & Convective cells can miss both gauges or be over-represented. & Learned kernels, antecedent sums; interval. \emph{Unresolved} without more spatial coverage.\\
+\textbf{Release deviations / emergency releases} & Actual flow may differ from the schedule (S1 mostly, downstream a lag later). & \S5(iv); deviation features; masking of the schedule. \emph{Unresolved:} unannounced emergency releases.\\
+\textbf{Sensor errors, drift, datum shifts} & Biased input $\Rightarrow$ biased forecast; flat-line = false calm. & QC flags $\to$ missing; increments on last value; robust (absolute) loss. \emph{Unresolved:} slow, undetected bias.\\
+\textbf{Few extreme floods} & Skill at the highest levels is least certain, and these matter most. & Flood weighting, oversampling, calibrated intervals, ensemble spread. \emph{Unresolved:} extrapolation beyond the historical record.\\
+\textbf{Only stage is measured} & No discharge $\Rightarrow$ no explicit mass balance; stage--discharge is non-linear. & Learned implicitly per station; priors from distances only.\\
+\textbf{Non-stationarity} & Channel change, new gate rules degrade skill. & Drift monitor, scheduled retraining; \emph{unresolved} between retrainings.\\ \bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{table}[H]\centering\scriptsize
+\renewcommand{\arraystretch}{1.08}
+\begin{tabularx}{\linewidth}{@{}>{\raggedright\arraybackslash}p{3.6cm}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}X@{}}
+\toprule
+Additional information requested & How it would help & Usable without it? \\ \midrule
+R1\ \ Level or discharge gauge on the unmonitored tributary (even a temporary one) & Turns node U from latent to supervised; removes the largest unexplained error at S3/S4. & Yes: latent U (A8) with wider intervals.\\
+R2\ \ Radar / gridded rainfall and 1--3\,h rainfall nowcast & Supplies the missing future-rain input and spatial coverage. & Yes: past-rain-only version above.\\
+R3\ \ Rating curves, cross-sections, hydraulic (e.g.\ 1-D) model & Sets the celerity prior $c^{\rm prior}$, enables mass-balance priors and \emph{simulated} extreme floods for training. & Yes: priors from distance and 5\,km/h start.\\
+R4\ \ Real-time gate telemetry and release operating/emergency rules & Reduces scheduled-vs-actual uncertainty; announces emergency releases earlier. & Yes: deviation features and masking.\\
+R5\ \ Telemetry latency logs, QC/maintenance history & Calibrates the delay simulation and missing-data patterns (A3, A4). & Yes: assumed distributions.\\
+R6\ \ Warning levels per station; more rain gauges / soil moisture & Correct loss weights (A12); better runoff modelling (A9). & Yes: top-5\,\% levels as proxy; two gauges.\\ \bottomrule
+\end{tabularx}
+\end{table}

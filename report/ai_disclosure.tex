@@ -1,0 +1,39 @@
+% ============================================================== AI USE DISCLOSURE
+\newpage
+\section*{Generative-AI use disclosure (course AI policy)}
+\addcontentsline{toc}{section}{Generative-AI use disclosure}
+
+\noindent\textbf{Tool.} Cursor (Claude) in VS Code, used locally with the assignment folder and conda environment \texttt{PA1\_DL}.
+
+\noindent\textbf{How it was used.} The assistant was used to understand the handout, to ask for section templates, and to sanity-check wording and numbers. Training, evaluation, file layout, and the submitted claims were the student's. Suggested text was kept only after it matched the handout and the saved result files.
+
+\noindent\textbf{Prompts given by the student} (15 representative questions; not a request to complete the assignment):
+\begin{enumerate}[leftmargin=*,itemsep=0.6pt]
+\item ``Please explain Assignment~2 in your own words: what is Q1 vs Q2, and what must be in the report vs the GitHub repo?''
+\item ``Give me a heading template for Question~1 that matches the PDF (architecture, assumptions, task, data, training, robustness). Do not fill the answers.''
+\item ``Which river facts are given, and which ones am I allowed to assume? I want history length and the 60-minute horizon labelled as assumptions if the brief does not fix them.''
+\item ``Is future rainfall allowed as an input? Is an already announced reservoir release allowed? Please quote the distinction.''
+\item ``For Moving MNIST, may I use torchvision's built-in train/test split, or must I split by video index? I am using conda env \texttt{PA1\_DL}.''
+\item ``What should Table~1 contain, and how are speed and the symmetry group $G$ defined in the handout? A checklist is enough.''
+\item ``How do I count parameters of a ConvLSTM so I can check that Model~A is 480{,}784?''
+\item ``What does the optical-flow figure need to show (inputs, arrows, calibration)? A caption template only.''
+\item ``Give me a short markdown template for the Q2.5 prediction file. Remind me that it has to be committed before I run the mirror / rotation / speed tests.''
+\item ``Same for Q2.11: a prediction template, and remind me it must be committed before I train B, C, and D.''
+\item ``In the PDF, what is the difference between models A, B, C, and D? I will choose D myself; I only want the definitions.''
+\item ``Write the symmetrised-forecaster formula from the handout so I can check my implementation of $C_T$ and $E_T$.''
+\item ``Give me a report outline (Q1, Q2a, Q2b, tables, figures) with empty bullets. I will write the content.''
+\item ``Please shorten my Question~1 headings and suggest how to draw the architecture in TikZ. Do not change the design.''
+\item ``My GitHub URL is \url{https://github.com/ihuzafaone/DLSTG-PA2}, name Huzaifa, roll 25280009. Put those in the header only. Then list remaining PDF requirements I may have missed.''
+\end{enumerate}
+
+\noindent\textbf{Coding help (summary).} Asked for a repo layout, a Table~1 checklist, a parameter-count check for Model~A, a caption template for the optical-flow figure, a Q1 section template, a reminder of what Model~D is allowed to change, and a report outline. Did not ask the assistant to train models or to invent results.
+
+\noindent\textbf{Help on code.} Example snippets and naming suggestions for data loading, ConvLSTM, metrics, training entry points, and symmetrisation (in this repo: \texttt{src/mmdata.py}, \texttt{src/models.py}, \texttt{src/evalkit.py}, \texttt{src/train.py}, \texttt{src/table1.py}, \texttt{src/fig1\_flow.py}, \texttt{q1/river\_prototype.py}). The student adapted those ideas, ran jobs in \texttt{PA1\_DL} on a local NVIDIA RTX~4060 Laptop GPU (8\,GB), and kept Model~D's dilation and the D$+$B run only after validation screening.
+
+\noindent\textbf{My checks on code.} Confirmed Table~1 against the handout; confirmed Model~A (and the screened Model~D) at 480{,}784 parameters; confirmed that every reported test number matches the JSON files in \texttt{results/}.
+
+\noindent\textbf{Question 1.} The assistant drafted empty six-heading templates and TikZ layout hints. History length $L{=}36$ and the six-step (60\,min) horizon are assumptions A1/A2 in the sense that the brief leaves both unspecified; the section keeps those separate from the given river. Future rain is not an input; an already announced release is. The diagram is the TikZ figure; headings were shortened by the student.
+
+\noindent\textbf{Question 2.} The assistant explained required tables/figures and commented on scripts. The student ran Table~1, Figure~1, training, and evaluation, and checked the numbers. Q2.5 was written before the mirror, rotation, and speed tests; Q2.11 was written before training B, C, and D.
+
+\noindent\textbf{Output kept from the assistant.} Clarifications of what the handout was asking, blank section templates, reminders of formulas already given in the brief, and help tightening wording, plus a checklist used on a final pass. Every number reported here was read off the student's own saved result files, never supplied by the assistant.

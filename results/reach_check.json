@@ -1,0 +1,32 @@
+{
+ "A": {
+  "cells": {
+   "u_tau": 2,
+   "h1_prev": 2,
+   "h2_prev": 1
+  },
+  "max_cells": 2,
+  "reach_px": 8,
+  "analytic_px": 8
+ },
+ "D": {
+  "cells": {
+   "u_tau": 4,
+   "h1_prev": 4,
+   "h2_prev": 3
+  },
+  "max_cells": 4,
+  "reach_px": 16,
+  "analytic_px": 16
+ },
+ "D_final": {
+  "cells": {
+   "u_tau": 3,
+   "h1_prev": 3,
+   "h2_prev": 2
+  },
+  "max_cells": 3,
+  "reach_px": 12,
+  "analytic_px": 12
+ }
+}

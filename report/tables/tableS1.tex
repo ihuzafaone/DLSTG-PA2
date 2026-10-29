@@ -1,0 +1,10 @@
+\begin{table}[H]\centering\small
+\caption*{\textbf{Table S1} (supplementary). Median centroid displacement (px) of a digit from the last input frame to the first forecast frame at $1\times$, $2\times$, $3\times$ (digits that form separate blobs in both frames; mean over seeds 0, 1 of each model's median; in brackets: median predicted/true per digit). Truth: 3.61, 7.07, 10.44 px.}
+\begin{tabular}{lrrr}\toprule
+Model & $1\times$ & $2\times$ & $3\times$ \\ \midrule
+A (baseline) & 3.36 (96\%) & 2.49 (39\%) & 2.05 (22\%) \\
+B (+sym.\ aug.) & 3.40 (97\%) & 2.64 (42\%) & 2.56 (27\%) \\
+C (+speed aug.) & 3.23 (93\%) & 5.43 (84\%) & 6.84 (72\%) \\
+D (reach 12 px) & 3.32 (96\%) & 5.73 (87\%) & 7.26 (77\%) \\
+final: sym.\ D & 3.40 (97\%) & 5.80 (88\%) & 7.15 (76\%) \\
+\bottomrule\end{tabular}\end{table}
