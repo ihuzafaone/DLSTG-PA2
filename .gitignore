@@ -1,0 +1,9 @@
+data/
+__pycache__/
+*.pyc
+screening/
+report/*.aux
+report/*.log
+report/main_test.*
+report/main_head.tex
+report/*.out
